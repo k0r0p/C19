@@ -1,6 +1,6 @@
 rm(list = ls())
 
-setwd("/Users/krp/Dropbox/Research/Corona/")
+setwd("~/Dropbox/Research/Corona/C19/")
 
 library(deSolve)
 library(tidyr)
@@ -201,7 +201,7 @@ K.model <- function(times, Y, param){
 #Solving diff equations
 valS = lsoda(state.val, times, K.model, param) 
 
-dim(valS)
+
 
 # Compartment tables
 valC <- cbind(valS[,1],
