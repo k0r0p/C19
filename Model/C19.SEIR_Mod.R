@@ -83,10 +83,11 @@ ld.dur <- 30
 sd.on <- 1
 sd.dur <- 364
 
+
 # PARAMETERS
-Ro    = 2.4              #reproduction number
-e.dur = 3.0              # epidemic duration
-i.dur = 12.5             #infectius duration
+Ro <- rlnorm(1, mean = log(2.2), sd = log(2.1))     #reproduction number from a log normal distribution
+e.dur = 5.2              # epidemic duration
+i.dur = 7             #infectius duration
 
 # probaility of infection transmission per contact
 ## i.prob.avg <- Ro / (avg.cont*i.dur) 
@@ -104,7 +105,7 @@ beta.ld.mat <- i.prob.poi*ld.mat      # beta matrix during lockdown
 beta.sd.mat <- i.prob.poi*sd.mat      # beaa matrix during social distancing
 sigma <- 1 / e.dur               # exposed to infectious transition rate
 gamma <- 1 / i.dur               # recovery rate, recovery includes death and healing
-asy.f <- 0.25                   # factor by which asymptomatic individuals are infectious
+asy.f <- 0.1                   # factor by which asymptomatic individuals are infectious
 iso.p <- 0                     # proportion isolated and quarantined
 iso.inf <- 0.15                # calc as avg.contIsolation/avg.cont; double this for quarantined people 
 
@@ -119,18 +120,20 @@ ifr <- c(rep(0.0016, 2), rep(0.00695, 2), rep(0.0309, 2), rep(0.0844, 2),
 #age-specific hospitalization rates
 hos.pac <- c(rep(0, 2), rep(0.0408, 2), rep(1.04, 2), rep(3.43, 2), 
              rep(4.25, 2), rep(8.16,2),  rep(11.8,2), rep(16.6,2))/100    # age cohort based hospialization rate
-                                                                          # From Verity et al; Lancet infectious diseases
-hos.pac <- hos.pac
+                                                                         # From Verity et al; Lancet infectious diseases
+
 # hos.p <- 0.028 #sum(hos.pac*np) # oveall proportion of  infectious people who require hospitalization,
                          # calculated from above
            
-icu.p <- 0.3           # percentage of hospitalized patients that require ICU 
-dis.r1 <- 1/10         # discharge rate for patients admitted to general ward (LOS 10 days)
-dis.r2 <- 1/6          # discharge rate for patients admitted to ICU (LoS 6 days)
-g.cap <- 2500          # total bed capacity, in ICU and General ward (for COVID patients)
-i.cap <- 200           # total bed capacity, in ICU and General ward (for COVID patients)
-dg.p <- ifr[16]        # mortality rate among those who require hospitalization but are not able to get it
-di.p <- 0.75           # dg.p roughly estimated assuming to qual th highst mortality of any ag cohort
+icu.p <- 0.28           # percentage of hospitalized patients that require ICU 
+dis.r1 <- 1/11         # discharge rate for patients admitted to general ward (LOS 10 days)
+dis.r2 <- 1/8          # discharge rate for patients admitted to ICU (LoS 6 days)
+g.cap <- 2700          # total bed capacity, in ICU and General ward (for COVID patients)
+hs.f <- 1.1             # health service capacity factor: (bed ratio china - b.ratio kathamandu)/b.ratio kathmandu)
+#i.cap <- 200           # total bed capacity, in ICU and General ward (for COVID patients)
+
+# dg.p <- ifr[16]        # mortality rate among those who require hospitalization but are not able to get it
+# di.p <- 0.75           # dg.p roughly estimated assuming to qual th highst mortality of any ag cohort
                        # and 75% among those req icu bed
                        # 
 
@@ -169,7 +172,7 @@ state.val <- c(S=S, E=E, Q=Q, I=I, J=J, R=R, H=H, U=U, D=D)
 param <- list(beta=beta.nlist, sigma=sigma, gamma=gamma, ifr = ifr,
               iso.p = iso.p, asy.f=asy.f, iso.inf = iso.inf,
               hos.pac = hos.pac, icu.p = icu.p, dis.r1 = dis.r1, dis.r2 = dis.r2,
-              g.cap = g.cap, i.cap = i.cap, dg.p = dg.p, di.p = di.p)                                          #parameters 
+              g.cap = g.cap, hs.f = hs.f)                                          #parameters 
   
 # Transmission model
 
@@ -201,8 +204,8 @@ K.model <- function(times, Y, param){
       dY[6*ac+i] <- hos.pac[i] * sigma * (Y[1*ac+i] + Y[2*ac+i]) - dis.r1 * Y[6*ac+i]         # Hospitalized
       dY[7*ac+i] <- icu.p * hos.pac[i] * sigma * (Y[1*ac+i] + Y[2*ac+i]) - dis.r2 * Y[7*ac+i] # IC
       dY[8*ac+i] <- ifelse(((sum(Y[6*ac]) - 2700) > 0),
-                        (Y[6*ac+i]) * ifr[i] + gamma * ifr[i] * (Y[3*ac+i] + Y[4*ac+i]),
-                           gamma * ifr[i] * (Y[3*ac+i] + Y[4*ac+i]) ) 
+                        (Y[6*ac+i]) * ifr[i] + gamma * ifr[i] * hs.f * (Y[3*ac+i] + Y[4*ac+i]),  # 1.1 is the factor (hs.f) by which ifr increases
+                           gamma * ifr[i] * (Y[3*ac+i] + Y[4*ac+i]) )                         # when health service capacity is exceeded.
       
                     
     }
@@ -250,7 +253,6 @@ tail(valC)
 round(tail(valC))
 
 sum(valC[,11])
-
 
 # Day with maximum infectious
 which.max(valC.b252[,"I"])
