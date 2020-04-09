@@ -81,13 +81,23 @@ ld.dur <- 30
 
 # time controls for social distancing, starting at sd.on and  lasting for s.dur more days
 sd.on <- 1
-sd.dur <- 364
+sd.dur <- 365
+
+# time controls for isolation, starting at is.on and  lasting for i.dur more days
+is.on <- 30
+is.dur <- 365
+
+is.t <- rep_len(0, 366) 
+for (i in is.on:(is.on+is.dur)){
+  is.t[i] <- 1
+}
+
 
 
 # PARAMETERS
-Ro <- rlnorm(1, mean = log(2.2), sd = log(2.1))     #reproduction number from a log normal distribution
-e.dur = 5.2              # epidemic duration
-i.dur = 7             #infectius duration
+Ro    <- 2.6                                # rlnorm(1, mean = log(2.2), sd = log(2.1))     #reproduction number from a log normal distribution
+e.dur <- 3                                # epidemic duration
+i.dur <- 12.5                                 #infectius duration
 
 # probaility of infection transmission per contact
 ## i.prob.avg <- Ro / (avg.cont*i.dur) 
@@ -105,8 +115,8 @@ beta.ld.mat <- i.prob.poi*ld.mat      # beta matrix during lockdown
 beta.sd.mat <- i.prob.poi*sd.mat      # beaa matrix during social distancing
 sigma <- 1 / e.dur               # exposed to infectious transition rate
 gamma <- 1 / i.dur               # recovery rate, recovery includes death and healing
-asy.f <- 0.1                   # factor by which asymptomatic individuals are infectious
-iso.p <- 0                     # proportion isolated and quarantined
+asy.f <- 0.25                   # factor by which asymptomatic individuals are infectious
+iso.p <- 0.1                     # proportion isolated and quarantined
 iso.inf <- 0.15                # calc as avg.contIsolation/avg.cont; double this for quarantined people 
 
 #fatality rates
@@ -169,8 +179,8 @@ beta.slist <- sd.blf(sd.on, sd.dur)   # list of beta matrices during social dist
 state.val <- c(S=S, E=E, Q=Q, I=I, J=J, R=R, H=H, U=U, D=D) 
 
 # parameter values; change the value of beta to test various scenarios
-param <- list(beta=beta.nlist, sigma=sigma, gamma=gamma, ifr = ifr,
-              iso.p = iso.p, asy.f=asy.f, iso.inf = iso.inf,
+param <- list(beta=beta.llist, sigma=sigma, gamma=gamma, ifr = ifr,
+              iso.p = iso.p, is.t = is.t, asy.f=asy.f, iso.inf = iso.inf,
               hos.pac = hos.pac, icu.p = icu.p, dis.r1 = dis.r1, dis.r2 = dis.r2,
               g.cap = g.cap, hs.f = hs.f)                                          #parameters 
   
@@ -195,16 +205,16 @@ K.model <- function(times, Y, param){
                               (Y[2*ac + seq(1:ac)]*asy.f*iso.inf*2) + 
                               (Y[4*ac+seq(1:ac)]*iso.inf))/N)) * 
                               Y[i] - 
-                              (sigma + iso.p)*Y[1*ac + i]         #Exposed
+                              (sigma + iso.p*is.t[times + 1])*Y[1*ac + i]         #Exposed
                                      
-      dY[2*ac+i] <- iso.p * Y[1*ac + i] - sigma * Y[2*ac+i]                              #Quarantined
-      dY[3*ac+i] <- sigma * Y[1*ac+i]  - (gamma + iso.p)* Y[3*ac + i]                    #Infectious
-      dY[4*ac+i] <- iso.p * Y[3*ac+i] + sigma * Y[2*ac+i] - gamma * Y[4*ac+i]            #Isolated  # iso.p is the prop of people in isolaton / quarantine
+      dY[2*ac+i] <- iso.p*is.t[times + 1] * Y[1*ac+i] - sigma * Y[2*ac+i]                              #Quarantined
+      dY[3*ac+i] <- sigma * Y[1*ac+i]  - (gamma + iso.p*is.t[times + 1])* Y[3*ac + i]                    #Infectious
+      dY[4*ac+i] <- iso.p*is.t[times + 1] * Y[3*ac+i] + sigma * Y[2*ac+i] - gamma * Y[4*ac+i]            #Isolated  # iso.p is the prop of people in isolaton / quarantine
       dY[5*ac+i] <- gamma * (1-ifr[i]) * (Y[3*ac+i] + Y[4*ac+i])                         #Recovered
       dY[6*ac+i] <- hos.pac[i] * sigma * (Y[1*ac+i] + Y[2*ac+i]) - dis.r1 * Y[6*ac+i]         # Hospitalized
       dY[7*ac+i] <- icu.p * hos.pac[i] * sigma * (Y[1*ac+i] + Y[2*ac+i]) - dis.r2 * Y[7*ac+i] # IC
       dY[8*ac+i] <- ifelse(((sum(Y[6*ac]) - 2700) > 0),
-                        (Y[6*ac+i]) * ifr[i] + gamma * ifr[i] * hs.f * (Y[3*ac+i] + Y[4*ac+i]),  # 1.1 is the factor (hs.f) by which ifr increases
+                      (Y[6*ac+i]) * ifr[i] * hs.f + gamma * ifr[i] * (Y[3*ac+i] + Y[4*ac+i]),  # 1.1 is the factor (hs.f) by which ifr increases
                            gamma * ifr[i] * (Y[3*ac+i] + Y[4*ac+i]) )                         # when health service capacity is exceeded.
       
                     
@@ -242,15 +252,30 @@ tail(valC)
 
 # Output tables saved  
 # age specific ifr and hos.pac, baseline capacity
-# valS.b252 <- valS  # output data by age cohort, 
-# valC.b252 <- valC  # output data consolidated 
+
+# Ro = 2.2, ld = NULL, iso.p <- 0, g.cap <- 2700 
+# valS.base <- valS  # output data by age cohort, 
+# valC.base <- valC  # output data consolidated 
+
+# Ro = 2.6, ld = NULL, iso.p <- 0, g.cap <- 2700 
+# valS.R26LIG <- valS  # output data by age cohort, 
+# valC.R26LIG  <- valC  # output data consolidated 
+
+# Ro = 1.8, ld = NULL, iso.p <- 0, g.cap <- 2700 
+# valS.R18LIG <- valS  # output data by age cohort, 
+# valC.R18LIG  <- valC  # output data consolidated 
+
+# Ro = 2.2, ld = Yes, iso.p <- 0, g.cap <- 2700 
+# valS.RLYsIG <- valS  # output data by age cohort, 
+# valC.RLYsIG  <- valC  # output data consolidated 
 
 
-# valC.b252T <- valS  # Considering excess deaths due to lack of healthcare access
-
+# Ro = 2.2, ld = 1 month, iso.p <- 0, g.cap <- 2700 
+# valS.RLIG <- valS  # output data by age cohort, 
+# valC.R18LIG  <- valC  # output data consolidated 
 
 #Table of final compartment sizes
-round(tail(valC))
+round(tail(valC.RLYsIG))
 
 sum(valC[,11])
 
