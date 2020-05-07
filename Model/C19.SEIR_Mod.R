@@ -3,21 +3,25 @@ rm(list = ls())
 setwd("~/Dropbox/Research/Corona/C19/")
 
 
-
 library(deSolve)
-library(tidyr)
 library(reshape)
 library(magrittr)
-library(plyr)
+library(dplyr)
 library(ggplot2)
 library(gdata)
 library(matlib)
-library(multisensi)
+library(RColorBrewer)
+library(purrr)
+library(plot.matrix)
+
 
 #CONTACT MATRIX
 n_mat <- read.xls("Data/nepal_cmat.xls", header = F)
 
-n_mat1 <- n_mat[,-1]                             # contact matrix without the labeling column
+## Intervention matrix
+inter.mat <- read.csv("Data/covid_inter.csv", header = TRUE, row.names = 1)
+
+n_mat1 <- n_mat[,-1]                             
 n_matA <- unname(as.matrix(n_mat1[1:16,]))       # all contact matrix
 n_matH <- unname(as.matrix(n_mat1[17:32,]))      # home contact matrix
 n_matS <- unname(as.matrix(n_mat1[33:48,]))      # school contact matrix
@@ -28,16 +32,14 @@ n_matO <- unname(as.matrix(n_mat1[65:80,]))      # other contact matrix
 n.matT <- unname(n_matH + n_matS + n_matW + n_matO) # sum matrices and remove row and col names
 
 # duration per contact
-avg.cont <- mean(apply(n.matT, 1, sum))      # average contacts under normal circumstances 15.6 contacts   
-avg.dur <- 1/(apply(n.matT, 1, sum))         # vector of contact duration by age cohort
-avg.dur.mat <- matrix(rep(avg.dur,16), ncol = 16, byrow=F) #matrix of contact duration by age cohort
+avg.cont <- mean(apply(n.matT, 1, sum))                    # average number of contacts
+avg.dur <- 1/(apply(n.matT, 1, sum))                       # vector of contact duration by age cohort
+avg.dur.mat <- matrix(rep(avg.dur,16), ncol = 16, byrow=F) # matrix of contact duration by age cohort
 
 
 #INTERVENTION EFFECTS
-# i16 x 16 identity matrix
 id.mat <- diag(16)
 
-# matrix of contacts under lockdown /social distancing scenario
 ld.f <- (1-0.7)              # lockdown reuces contact down to this proportion
 sd.f <- (1-0.35)             # social distancing reduces contact down to this proportion
 
@@ -51,7 +53,7 @@ N0 = 2.6e6                 # the population of kathmandu
 E0 = 65                    # Estimated number exposed on day simulatino started
 Q0 = 0                     
 I0 = 120                   # Estimated number infected on day simulation started
-S0 = N0 - E0 - I0     # subtract exposed and infected from total to get susceptible
+S0 = N0 - E0 - I0          # subtract exposed and infected from total to get susceptible
 J0 = 0
 H0 = 0
 U0 = 0
@@ -75,122 +77,164 @@ R <- c(rep(R0, ac))*np
 N <- c(rep(N0, ac))*np
 
 #time variable
-t <- 365               # time (days) to simulate
-dt <- 1                # time step to simualte
+t <- 365                       # time (days) to simulate
+dt <- 1                        # time step to simualte
 times <- seq(0, t, by = dt)
 
-# time controls for lockdown, starting at ld.on and lasting for ld.dur more days
-ld.on <- 1
-ld.dur <- 30
-
-# time controls for social distancing, starting at sd.on and  lasting for s.dur more days
-sd.on <- 1
-sd.dur <- 365
-
-# time controls for isolation, starting at is.on and  lasting for i.dur more days
-is.on <- 30
-is.dur <- 365
-
-is.t <- rep_len(0, 366) 
-for (i in is.on:(is.on+is.dur)){
-  is.t[i] <- 1
-}
-
-
-
-# PARAMETERS
-Ro    <- 2.4                               # rlnorm(1, mean = log(2.2), sd = log(2.1))     #reproduction number from a log normal distribution
-e.dur <- 5.2                                # epidemic duration
-i.dur <- 7                                #infectius duration
-
-
-# probaility of infection transmission per contact (poisson distributed)
-
-i.prob.poi <- 1 - (exp)(-(Ro/i.dur)*(avg.dur.mat))  
-
-
-## flow parameters
-beta.nl.mat <- i.prob.poi*n.matT      # beta matrix at normal circmstances, scalar multiplication
-beta.ld.mat <- i.prob.poi*ld.mat      # beta matrix during lockdown
-beta.sd.mat <- i.prob.poi*sd.mat      # beaa matrix during social distancing
-sigma <- 1 / e.dur               # exposed to infectious transition rate
-gamma <- 1 / i.dur               # recovery rate, recovery includes death and healing
-asy.f <- 0.1                   # factor by which asymptomatic individuals are infectious
-iso.p <- 0.0                   # proportion isolated and quarantined
-iso.inf <- 0.15                # calc as avg.contIsolation/avg.cont; double this for quarantined people 
-
-icu.p <- 0.20               # percentage of hospitalized patients that require ICU 
-dis.r1 <- 1/8               # discharge rate for patients admitted to general ward (LOS 10 days)
-dis.r2 <- 1/6               # discharge rate for patients admitted to ICU (LoS 6 days)
-g.cap <- 2700               # total bed capacity, in ICU and General ward (for COVID patients)
-hs.f <- 0                   # health service capacity factor: (bed ratio china - b.ratio kathamandu)/b.ratio kathmandu)
-f <- 0.8                    # proportion of deaths that happen among patients who require ICU
-                            # and 75% among those req icu bed
 
 #fatality rates
 
 ifr <- c(rep(0.0016, 2), rep(0.00695, 2), rep(0.0309, 2), rep(0.0844, 2),
-         rep(0.161, 2), rep(0.595, 2), rep(1.93, 2), 4.28, 7.80)/100      # age specific infn fatality ratio
-                                                                          # From Verity et al; Lancet infectious diseases
+         rep(0.161, 2), rep(0.595, 2), rep(1.93, 2), 4.28, 7.80)/100      
 
- 
-#health service specific parameters
+
+
 #age-specific hospitalization rates
 hos.pac <- c(rep(0.01, 2), rep(0.0408, 2), rep(1.04, 2), rep(3.43, 2), 
-             rep(4.25, 2), rep(8.16,2),  rep(11.8,2), rep(16.6,2))/100    # age cohort based hospialization rate
-                                                                         # From Verity et al; Lancet infectious diseases
+             rep(4.25, 2), rep(8.16,2),  rep(11.8,2), rep(16.6,2))/100 
 
-# list of beta matrices
 
-# baseline scenario
-beta.list <- list(length=366)
- for (i in 1:366) {
-  beta.list[[i]] <-  beta.nl.mat 
- }
+#nsims
+n.sims = 2000
 
-# under lockdown starting at ld.on and for ld.dur
-ld.blf <- function(ld.on, ld.dur) {
-  for (i in ld.on:(ld.on+ld.dur)) {
-   beta.list[[i]] <-  beta.ld.mat
-  }
-  return(beta.list)
-} 
 
-# under social distancing starting at sd.on and ending at sd.off
-sd.blf <- function(sd.on, sd.dur) {
-  for (i in sd.on:(sd.on+sd.dur)) {
-    beta.list[[i]] <-  beta.sd.mat 
-  }
-  return(beta.list)
-} 
-
-# under lock down + social distancing starting at ld.on ending at ld.dur and sd for the year. 
-# under lockdown starting at ld.on and for ld.dur
-hd.blf <- function(ld.on, ld.dur) {
-  for (i in ld.on:(ld.on+ld.dur)) {
-    beta.list[[i]] <-  beta.ld.mat
-  }
-  for (i in (ld.on+ld.dur+1):366) {
-    beta.list[[i]] <-  beta.ld.mat
-  }
-  return(beta.list)
-} 
-
-beta.nlist <- beta.list               # list of beta matrices under baseline scenario
-beta.llist <- ld.blf(ld.on, ld.dur)   # list of beta matrices during lockdown
-beta.slist <- sd.blf(sd.on, sd.dur)   # list of beta matrices during social distancing
-beta.hlist <- hd.blf(ld.on, ld.dur)
+asy.f <- 0.1                # factor by which asymptomatic individuals are infectious
+iso.inf <- 0.15             # calc as avg.contIsolation/avg.cont; double this for quarantined people 
+i.dur <- 7    
+icu.p <- 0.20               # percentage of hospitalized patients that require ICU 
+dis.r1 <- 1/8               # discharge rate for patients admitted to general ward (LOS 10 days)
+dis.r2 <- 1/6               # discharge rate for patients admitted to ICU (LoS 6 days)
+g.cap <- 5400               # total bed capacity, in ICU and General ward (for COVID patients)
+hs.f <- 0                   # 0.7 for 1000 additional beds, 0.52 for 2000 additional beds baseline,    # health service capacity factor: (bed ratio china - b.ratio kathamandu)/b.ratio kathmandu)
+f <- 0.8                    # proportion of deaths that happen among patients who require ICU
 
 # State and parameter values to pass on to LSODA 
 state.val <- c(S=S, E=E, Q=Q, I=I, J=J, H=H, U=U, D=D, R=R, N=N) 
 
-# parameter values; change the value of beta to test various scenarios
-param <- list(beta=beta.nlist, sigma=sigma, gamma=gamma, ifr = ifr,
-              iso.p = iso.p, is.t = is.t, asy.f=asy.f, iso.inf = iso.inf,
-              hos.pac = hos.pac, icu.p = icu.p, dis.r1 = dis.r1, dis.r2 = dis.r2,
-              g.cap = g.cap, hs.f = hs.f, f = f)                                          #parameters 
+
+## Simulations
+system.time(
+for (i in 1:nrow(inter.mat)) {
+
+oput <- replicate(n = n.sims, 
+                  
+                  OvFun(ld.on = inter.mat[i,1],
+                       ld.off = inter.mat[i,2],
+                       sd.on = inter.mat[i,3],
+                       sd.off = inter.mat[i,4],
+                       is.on = inter.mat[i,5],
+                       is.off = inter.mat[i,6],
+                       iso.p = inter.mat[i,7]), 
+                            simplify = F)
+
+assign(paste("Int", i, sep = ""), oput)
+}
+)
+
+
+## List of simultion results
+
+IntL <- list(Int1, Int2, Int3, Int4, Int5, Int6, Int7, Int8, 
+             Int9, Int10, Int11, Int12, Int13, Int14, Int15)
+
+
+## Summary variables
+
+purrr::map_dbl(Int1, ~max(.x[,"I"])) %>% summary() 
+
+purrr::map_dbl(Int1, ~which.max(.x[,"I"])) %>% summary() 
+                      
+purrr::map_dbl(Int1, ~max(.x[,"E"])) %>% summary() 
+                      
+purrr::map_dbl(Int1, ~which.max(.x[,"E"])) %>% summary() 
+                      
+purrr::map_dbl(Int1, ~max(.x[,"H"])) %>% summary() 
+                      
+purrr::map_dbl(Int1, ~which.max(.x[,"H"])) %>% summary() 
+                      
+purrr::map_dbl(Int1, ~max(.x[,"U"])) %>% summary() 
+                      
+purrr::map_dbl(Int1, ~which.max(.x[,"U"])) %>% summary() 
+                      
+purrr::map_dbl(Int1, ~.x[366,"D"]) %>% summary() 
+                      
+
+# Variable sweep and ODE function
+
+OvFun <- function(ld.on,
+                  ld.off,
+                  sd.on,
+                  sd.off,
+                  is.on,
+                  is.off,
+                  iso.p) {
+                  
+
+  Ro =  runif(1, min = 2.0, max = 2.8)
   
-# Transmission model
+  e.dur = runif(1,  min = 3, max = 7)
+  
+  i.prob.poi <- 1 - (exp)(-(Ro/i.dur)*(avg.dur.mat))  
+  
+  
+  beta.nl.mat <- i.prob.poi*n.matT      # beta matrix at normal circmstances, scalar multiplication
+  beta.ld.mat <- i.prob.poi*ld.mat      # beta matrix during lockdown
+  beta.sd.mat <- i.prob.poi*sd.mat      # beta matrix during social distancing
+  
+ 
+  
+  beta.fn <- function(ld.on, ld.off, sd.on, sd.off) {
+    
+  beta.list <- list(length=366)  
+  
+  for (i in 1:366) {
+    beta.list[[i]] <-  beta.nl.mat 
+  }
+  
+  if (sd.on > 0) {
+  for (i in sd.on:sd.off) {
+      beta.list[[i]] <-  beta.sd.mat
+  }
+  }
+  
+  if (ld.on > 0) {
+    for (i in ld.on:ld.off) {
+      beta.list[[i]] <-  beta.ld.mat
+    }
+  } 
+  return(beta.list)
+  }
+  
+  
+   beta.hlist <- beta.fn(ld.on, ld.off, sd.on, sd.off)
+  
+  
+  is.t <- rep_len(0, 366) 
+    for (i in is.on:(is.on+is.off)){
+     is.t[i] <- 1
+  }
+  
+  
+  param <- list(beta = beta.hlist, 
+                sigma = 1 / e.dur, 
+                gamma = 1 / i.dur, 
+                ifr = ifr,
+                iso.p = iso.p, 
+                is.t = is.t, 
+                asy.f = asy.f, 
+                iso.inf = iso.inf,
+                hos.pac = hos.pac, 
+                icu.p = icu.p, 
+                dis.r1 = dis.r1, 
+                dis.r2 = dis.r2,
+                g.cap = g.cap, 
+                hs.f = hs.f, 
+                f = f)  
+  
+  
+
+# ODE solver function
+
 
 K.model <- function(times, Y, param){
   
@@ -226,20 +270,29 @@ K.model <- function(times, Y, param){
       dY[5*ac+i] <- hos.pac[i] * (Y[4*ac+i] + Y[3*ac + i]) - (dis.r1)* Y[5*ac+i]                               # Hospitalized
       dY[6*ac+i] <- icu.p * (dis.r1)* Y[5*ac+i]  - dis.r2 * Y[6*ac+i]                                     # ICU
       
-      dY[7*ac+i] <-   (1-icu.p) * dis.r1 * Y[5*ac+i] * (ifr[i]/hos.pac[i])*(1-f) + 
-                      dis.r2 * Y[6*ac+i] * (ifr[i]/hos.pac[i])*f 
+      dY[7*ac+i] <- ifelse(((sum(Y[5*ac+seq(1:ac)] + Y[6*ac+seq(1:ac)]) - g.cap) > 0),
+        
+                    
+                    (1-icu.p) * dis.r1 * Y[5*ac+i] * (ifr[i]/hos.pac[i])*(1-f)*(1 + hs.f) + 
+                    dis.r2 * Y[6*ac+i] * (ifr[i]/hos.pac[i])*f*(1 + hs.f),
+                    
+                    (1-icu.p) * dis.r1 * Y[5*ac+i] * (ifr[i]/hos.pac[i])*(1-f) + 
+                    dis.r2 * Y[6*ac+i] * (ifr[i]/hos.pac[i])*f)
                                              
-      dY[8*ac+i] <-  (1-icu.p) * dis.r1 * Y[5*ac+i] * (1 - (ifr[i]/hos.pac[i])*(1-f)) +
-                     dis.r2 * Y[6*ac+i] * (1 - (ifr[i]/hos.pac[i])*f) +  
-                     gamma * (Y[3*ac+i] + Y[4*ac+i])
+      dY[8*ac+i] <-  ifelse(((sum(Y[5*ac+seq(1:ac)] + Y[6*ac+seq(1:ac)]) - g.cap) > 0),
+                            
+                    - ((1-icu.p) * dis.r1 * Y[5*ac+i] * (ifr[i]/hos.pac[i])*(1-f)*hs.f + 
+                    dis.r2 * Y[6*ac+i] * (ifr[i]/hos.pac[i])*f*hs.f) +
+                      
+                    (1-icu.p) * dis.r1 * Y[5*ac+i] * (1 - (ifr[i]/hos.pac[i])*(1-f)) +
+                    dis.r2 * Y[6*ac+i] * (1 - (ifr[i]/hos.pac[i])*f) +  
+                    gamma * (Y[3*ac+i] + Y[4*ac+i]),
+                    
+                    (1-icu.p) * dis.r1 * Y[5*ac+i] * (1 - (ifr[i]/hos.pac[i])*(1-f)) +
+                    dis.r2 * Y[6*ac+i] * (1 - (ifr[i]/hos.pac[i])*f) +  
+                    gamma * (Y[3*ac+i] + Y[4*ac+i]))
       
-                           # ifelse(((sum(Y[5*ac+seq(1:ac)] + Y[6*ac+seq(1:ac)]) - g.cap) > 0),
-                           
-                             # -(sum(Y[5*ac+seq(1:ac)] + Y[6*ac+seq(1:ac)]) - g.cap) * ifr[i]*hs.f  + 
-                             # dis.r1 * Y[5*ac+i] * (1 - (ifr[i]/hos.pac[i])*(1-icu.p)*(1-f)) +
-                             # dis.r2 * Y[6*ac+i] * (1 - (ifr[i]/hos.pac[i])*icu.p*f) +  
-                             # gamma * (Y[3*ac+i] + Y[4*ac+i]), 
-                        
+                     
         
       dY[9*ac+i] <- dY[i] + dY[1*ac+i] + dY[2*ac+i] + dY[3*ac+i] + dY[4*ac+i] + 
                        dY[5*ac+i] + dY[6*ac+i] + dY[7*ac+i] + dY[8*ac+i] 
@@ -251,12 +304,11 @@ K.model <- function(times, Y, param){
     })
 }
                       
-#Solving diff equations
-
 
 valS = lsoda(state.val, times, K.model, param) 
 
 # Compartment tables
+
 valC <- cbind(valS[,1],
               apply(valS[,2:17], 1, sum),
               apply(valS[,18:33], 1, sum),
@@ -268,185 +320,12 @@ valC <- cbind(valS[,1],
               apply(valS[,114:129], 1, sum),
               apply(valS[,130:145], 1, sum),
               apply(valS[,146:161], 1, sum))
-            
-              
+
+
 colnames(valC) <- c("time","S", "E","Q","I","J","H", "U", "D","R", "N")
 
-round(tail(valC, 5L))
+return(round(valC))
+
+}
 
 
-## data tables with poisson distributed beta
-
-# Output tables saved  
-# age specific ifr and hos.pac, baseline capacity
-
-# Ro = 2.4, ld = NULL, sd = NULL, iso.p <- 0, g.cap <- 2700 
-# valS.bs <- valS  # output data by age cohort, 
-# valC.bs <- valC  # output data consolidated 
-
-# Ro = 2.4, ld = Y1, iso.p <- 0, g.cap <- 2700 
-# valS.LD1 <- valS  # output data by age cohort, 
-# valC.LD1  <- valC  # output data consolidated 
-
-# Ro = 2.4, ld = Y2, iso.p <- 0, g.cap <- 2700 
-# valS.LD2 <- valS  # output data by age cohort, 
-# valC.LD2  <- valC  # output data consolidated 
-
-# Ro = 2.4, sd = Yes 12months, iso.p <- 0, g.cap <- 2700 
-# valS.SD12 <- valS  # output data by age cohort, 
-# valC.SD12  <- valC  # output data consolidated 
-
-# Ro = 2.4, sd = Yes 6months, iso.p <- 0, g.cap <- 2700 
-# valS.SD6 <- valS  # output data by age cohort, 
-# valC.SD6  <- valC  # output data consolidated 
-
-# Ro = 2.4, isol = day30, yr long, iso.p <- 0.1, g.cap <- 2700 
-# valS.IS30 <- valS  # output data by age cohort, 
-# valC.IS30  <- valC  # output data consolidated 
-
-# Ro = 2.2, isol = day30, iso.p <- 0.1, g.cap <- 2700 
-# valS.IS60 <- valS  # output data by age cohort, 
-# valC.IS60  <- valC  # output data consolidated 
-
-# Ro = 2.4, isol = day30, 6 mont long, iso.p <- 0.1, g.cap <- 2700 
-# valS.IS306 <- valS  # output data by age cohort, 
-# valC.IS306  <- valC  # output data consolidated 
-
-# Ro = 2.4, isol = day30, 12 mont long, iso.p <- 0.1, LD 1 month, g.cap <- 2700 
-# valS.IS30LD1 <- valS  # output data by age cohort, 
-# valC.IS30LD1  <- valC  # output data consolidated 
-
-# Ro = 2.4, isol = day30, 12 mont long, iso.p <- 0.1, LD 1 month, SD day 30 - end of the year, 
-# g.cap <- 2700 
-# valS.ISLDSD <- valS  # output data by age cohort, 
-# valC.ISLDSD  <- valC  # output data consolidated 
-
-
-# Ro = 2.8, base scenario, no LD or SD or isol, 
-# valS.R8.bs<- valS  # output data by age cohort, 
-# valC.R8.bs <- valC  # output data consolidated 
-
-
-# Ro = 2.8, isol = day30, 12 mont long, iso.p <- 0.1, LD 1 month, SD day 30 - end of the year, 
-# valS.R8.valS.ISLDSD <- valS  # output data by age cohort, 
-# valC.R8.valS.ISLDSD <- valC  # output data consolidated 
-
-# Ro = 2.0, base scenario, no LD or SD or isol, 
-# valS.R0.bs<- valS  # output data by age cohort, 
-# valC.R0.bs <- valC  # output data consolidated 
-
-# Ro = 2.4, isolation = 0.05 no LD or SD or isol, 
-# valS.R0.bs<- valS  # output data by age cohort, 
-# valC.R0.bs <- valC  # output data consolidated 
-
-# Ro = 2.4, isolation = 0.05 no LD or SD or isol, 
-# valS.IS5.bs<- valS  # output data by age cohort, 
-# valC.IS5.bs <- valC  # output data consolidated 
-
-# Ro = 2.4, isolation = 0.05 at 1 month month and hen SD year round  LD or SD or isol, 
-# valS.I5.SLDSD <- valS  # output data by age cohort, 
-# valC.I5.SLDSD  <- valC  # output data consolidated 
-
-# Ro = 2.4, e.dur = 3 days, otherwise baselinescenario
-# valS.E3 <- valS  # output data by age cohort, 
-# valC.E3 <- valC  # output data consolidated 
-
-
-# Day with maximum infectious
-max(valC[,"I"])
-which.max(valC[,"I"])
-
-## Calculating hospital gen. bed need
-
-
-# Maximum hospital bed requirement in a day
-max(valC[,"H"])
-
-# Day with maximum hospital bed-requirement
-which.max(valC[,"H"])
-
-## Calculating ICU bed need
-
-
-# Maximum ICU bed requirement
-max(valC[,"U"])
-
-# Day with maximum ICU bed-requirement
-which.max(valC[,"U"])
-
-
-# TempA
-
-plot(valC[,"S"], type = "l", col = "blue", ylim = c(0,2.5e6), xaxt = "n", lwd = 2.0,
-     #xlim = c(0, 400),
-     ylab = "Number of Individuals", 
-     xlab = "Days", 
-     main = "Corona virus transmission dynamics for Kathmandu\n Total Infected",
-     sub = "R0 = 2.4, IncuP = 5.0, InfDur = 7, N = 2.6MM, Initial Exp. = 66, Initial Inf. = 121, InfFR = 0.28%", 
-     cex.sub = 0.8, col.sub = "red") 
-axis(1, at = 50*(0:9))
-lines(valC[,"E"], col = "red2", lwd = 2)
-lines(valC[,"I"], col = "orange", lwd = 2) 
-lines(valC[,"R"], col = "purple", lwd = 2) 
-lines(valC[,"H"], col = "slateblue", lwd = 2) 
-lines(valC[,"U"], col = "violet", lwd = 2) 
-lines(valC[,"D"], col = "black", lwd = 2) 
-lines(valC[,"N"], col = 9, lwd = 2) 
-
- 
-  plot(valCp.b252.h1[,"H"], type = "l", col = "blue", ylim = c(0,2.5e4), xaxt = "n", lwd = 2.0,
-       #xlim = c(0, 400),
-       ylab = "Number of Individuals", 
-       xlab = "Days", 
-       main = "Corona virus transmission dynamics for Kathmandu\n Total Infected",
-       sub = "R0 = 2.3, IncuP = 3.0, InfDur = 12.5, N = 2.6MM, Initial Exp. = 66, Initial Inf. = 121, InfFR = 0.28%", 
-       cex.sub = 0.8, col.sub = "red") 
-  axis(1, at = 50*(0:9))
-  lines(valCp.b252.h2[,"H"], col = "red2", lwd = 2)
-  lines(valCp.b252.h1[,"D"], col = "purple", lwd = 2)  
-  #lines(valCp.b252.h2[,"D"], col = "orange3", lwd = 2)
-  lines(valC.sdcf10252[,"I"], col = "green4", lwd = 2.5)
-  abline(h = 2700, col = "maroon", lwd = 1, lty = 4)
-  #text(40, 5000, "SYSTEM CAPACITY \n(2700 BEDS/day)", col = "maroon", cex = 0.9)
-  legend(190, 9.0e5, legend = c("Base Case", "Lock down", "Social Distancing", "SD + Test/\nCase Finding(10%)"),
-         col = c("red2", "blue4","orange3","green4"), lwd =2, lty=1, cex = 0.8)#, #"blue","green3"), 
-  
-  # TempB
-  
-  plot(valC[,"U"], type = "l", col = 1, ylim = c(0,3.2e3), xaxt = "n", lwd = 2.0,
-       #xlim = c(0, 400),
-       ylab = "Number of patients", 
-       xlab = "Days", 
-       main = "ICU Hospitalization Need versus System Capacity",
-       sub = "R0 = 2.3, IncuP = 3.0, InfDur = 12.5, N = 2.6MM, Initial Exp. = 66, Initial Inf. = 121, InfFR = 0.28%", 
-       cex.sub = 0.8, col.sub = "red") 
-  axis(1, at = 50*(0:9))
-  lines(valC.ld252[,"U"], col = 2, lwd = 2)
-  lines(valC.sd252[,"U"], col = "green4", lwd = 2)  
-  lines(valC.sdcf10252[,"U"], col = "blue3", lwd = 1.5)
-  #lines(t, sol2[,"TtDead"], col = "black", lwd = 1.5)
-  abline(h = 200, col = "maroon", lwd = 2, lty = 4)
-  text(40, 450, "SYSTEM CAPACITY \n(200 ICU BEDS/day)", col = "maroon", cex = 0.9)
-  legend(200, 2.50e3, legend = c("Base Case", "Lock down", "Social Distancing", "SD + Test(10%)"),
-         col = c(1:2, "green4","blue3"), lty=1, cex = 0.8, lwd = 2)
-  
-  
-  # TempB
-  
-  plot(valC.b252[,"S"], type = "l", col = 1, ylim = c(0,2.6e6), xaxt = "n", lwd = 2.0,
-       #xlim = c(0, 400),
-       ylab = "Number of individuals", 
-       xlab = "Days", 
-       main = "COVID-19 Transmission Dynamics in Kathmandu",
-       sub = "R0 = 2.3, IncuP = 3.0, InfDur = 12.5, N = 2.6MM, Initial Exp. = 66, Initial Inf. = 121, InfFR = 0.28%", 
-       cex.sub = 0.8, col.sub = "maroon") 
-  axis(1, at = 50*(0:9))
-  lines(valC.b252[,"E"], col = "orange", lwd = 2)
-  lines(valC.b252[,"I"], col = "red3", lwd = 2)  
-  lines(valC.b252[,"R"], col = "blue3", lwd = 1.5)
-  lines(valC.b252[,"D"], col = "black", lwd = 1.5)
-  abline(h = 200, col = "maroon", lwd = 2, lty = 4)
-  #text(40, 450, "SYSTEM CAPACITY \n(200 ICU BEDS/day)", col = "maroon", cex = 0.9)
-  legend(180, 2.00e6, legend = c("Susceptible", "Exposed", "Infectious", "Recovered", "Dead"),
-         col = c("green4", "orange","red3", "blue3", "black"), lty=1, cex = 0.8, lwd = 2)
-  
